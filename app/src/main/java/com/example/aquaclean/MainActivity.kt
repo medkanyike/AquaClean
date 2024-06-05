@@ -1,42 +1,36 @@
 package com.example.aquaclean
 
-import android.os.Bundle
-import androidx.activity.ComponentActivity
-import androidx.activity.compose.setContent
-import androidx.activity.enableEdgeToEdge
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.tooling.preview.Preview
-import com.example.aquaclean.ui.theme.AquaCleanTheme
-
-
-
 import android.Manifest
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.ImageDecoder
 import android.net.Uri
 import android.os.Build
+import android.os.Bundle
+import android.os.Handler
+import android.util.Size
 import androidx.annotation.RequiresApi
-import androidx.camera.core.ImageCapture
-import androidx.camera.core.ImageCaptureException
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.camera.core.*
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.layout.*
-import androidx.compose.material.*
+import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.LifecycleOwner
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.isGranted
 import com.google.accompanist.permissions.rememberPermissionState
 import java.io.File
+import java.nio.ByteBuffer
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
@@ -47,19 +41,15 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         cameraExecutor = Executors.newSingleThreadExecutor()
         setContent {
-            Scaffold {
-                    innerPadding ->
+            Scaffold { innerPadding ->
                 Column(
                     modifier = Modifier
                         .padding(innerPadding),
                     verticalArrangement = Arrangement.spacedBy(16.dp),
                 ) {
-
-
                     MyApp(cameraExecutor)
                 }
             }
-
         }
     }
 
@@ -77,47 +67,67 @@ fun MyApp(cameraExecutor: ExecutorService) {
     var result by remember { mutableStateOf("") }
     val tfliteHelper = remember { TFLiteHelper(context) }
     val imageCapture = remember { ImageCapture.Builder().build() }
+    var elapsedTime by remember { mutableStateOf("00:00") }
+    val timerHandler = remember { Handler() }
+    var startTime by remember { mutableStateOf(0L) }
 
     if (cameraPermissionState.status.isGranted) {
         val previewView = remember { PreviewView(context) }
-        AndroidView(factory = { previewView }, )
+        AndroidView(factory = { previewView })
 
         Column(
             modifier = Modifier.fillMaxSize(),
             verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-
+            Text(text = elapsedTime, style = MaterialTheme.typography.bodyMedium)
             Button(onClick = {
-                val outputOptions = ImageCapture.OutputFileOptions.Builder(createFile(context)).build()
-                imageCapture.takePicture(outputOptions, cameraExecutor,
-                    object : ImageCapture.OnImageSavedCallback {
-                        @RequiresApi(Build.VERSION_CODES.P)
-                        override fun onImageSaved(outputFileResults: ImageCapture.OutputFileResults) {
-                            val bitmap = outputFileResults.savedUri?.let { loadBitmap(it, context) }
-                            result = bitmap?.let { tfliteHelper.classifyImage(it) }.toString()
-                        }
+                // Start the timer
+                startTime = System.currentTimeMillis()
+                timerHandler.post(object : Runnable {
+                    override fun run() {
+                        val seconds = (System.currentTimeMillis() - startTime) / 1000
+                        elapsedTime = String.format("%02d:%02d", seconds / 60, seconds % 60)
+                        timerHandler.postDelayed(this, 1000)
+                    }
+                })
 
-                        override fun onError(exception: ImageCaptureException) {
-                            result = "Image capture failed: ${exception.message}"
-                        }
-                    })
+                imageCapture.takePicture(cameraExecutor, object : ImageCapture.OnImageCapturedCallback() {
+                    @RequiresApi(Build.VERSION_CODES.P)
+                    override fun onCaptureSuccess(image: ImageProxy) {
+                        val bitmap = imageProxyToBitmap(image)
+                        result = bitmap?.let { tfliteHelper.classifyImage(it) }.toString()
+
+                        // Stop the timer
+                        timerHandler.removeCallbacksAndMessages(null)
+
+                        // Close the image to free up resources
+                        image.close()
+                    }
+
+                    override fun onError(exception: ImageCaptureException) {
+                        result = "Image capture failed: ${exception.message}"
+
+                        // Stop the timer
+                        timerHandler.removeCallbacksAndMessages(null)
+                    }
+                })
             }) {
                 Text("Capture Image")
             }
 
-            Text(text = result, style = MaterialTheme.typography.h6)
+            Text(text = result, style = MaterialTheme.typography.bodyLarge)
         }
 
         LaunchedEffect(Unit) {
             val cameraProvider = ProcessCameraProvider.getInstance(context).get()
-            val preview = androidx.camera.core.Preview.Builder().build().also {
+            val preview = Preview.Builder().build().also {
                 it.setSurfaceProvider(previewView.surfaceProvider)
             }
-            val cameraSelector = androidx.camera.core.CameraSelector.DEFAULT_BACK_CAMERA
+            val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
             try {
                 cameraProvider.unbindAll()
-                cameraProvider.bindToLifecycle(context as ComponentActivity, cameraSelector, preview, imageCapture)
+                cameraProvider.bindToLifecycle(context as LifecycleOwner, cameraSelector, preview, imageCapture)
             } catch (exc: Exception) {
                 // Handle exceptions
             }
@@ -127,15 +137,18 @@ fun MyApp(cameraExecutor: ExecutorService) {
     }
 }
 
+@RequiresApi(Build.VERSION_CODES.KITKAT)
+private fun imageProxyToBitmap(image: ImageProxy): Bitmap? {
+    val planeProxy = image.planes[0]
+    val buffer: ByteBuffer = planeProxy.buffer
+    val bytes = ByteArray(buffer.remaining())
+    buffer.get(bytes)
+    return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, null)
+}
+
 fun createFile(context: Context): File {
     val mediaDir = context.externalMediaDirs.firstOrNull()?.let {
         File(it, context.getString(R.string.app_name)).apply { mkdirs() }
     }
     return File(mediaDir, "${System.currentTimeMillis()}.jpg")
-}
-
-@RequiresApi(Build.VERSION_CODES.P)
-fun loadBitmap(uri: Uri, context: Context): Bitmap {
-    val source = ImageDecoder.createSource(context.contentResolver, uri)
-    return ImageDecoder.decodeBitmap(source)
 }
