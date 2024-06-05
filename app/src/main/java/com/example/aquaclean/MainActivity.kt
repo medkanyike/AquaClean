@@ -1,6 +1,8 @@
 package com.example.aquaclean
 
 import android.Manifest
+import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothManager
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -16,12 +18,21 @@ import androidx.activity.compose.setContent
 import androidx.camera.core.*
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
@@ -36,9 +47,13 @@ import java.util.concurrent.Executors
 
 class MainActivity : ComponentActivity() {
     private lateinit var cameraExecutor: ExecutorService
+    private lateinit var bluetoothAdapter: BluetoothAdapter
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        val bluetoothManager = getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
+        bluetoothAdapter = bluetoothManager.adapter
+
         cameraExecutor = Executors.newSingleThreadExecutor()
         setContent {
             Scaffold { innerPadding ->
@@ -47,7 +62,9 @@ class MainActivity : ComponentActivity() {
                         .padding(innerPadding),
                     verticalArrangement = Arrangement.spacedBy(16.dp),
                 ) {
-                    MyApp(cameraExecutor)
+
+                    MyApp(cameraExecutor, bluetoothAdapter)
+
                 }
             }
         }
@@ -61,7 +78,7 @@ class MainActivity : ComponentActivity() {
 
 @OptIn(ExperimentalPermissionsApi::class)
 @Composable
-fun MyApp(cameraExecutor: ExecutorService) {
+fun MyApp(cameraExecutor: ExecutorService,bluetoothAdapter: BluetoothAdapter) {
     val cameraPermissionState = rememberPermissionState(permission = Manifest.permission.CAMERA)
     val context = LocalContext.current
     var result by remember { mutableStateOf("") }
@@ -70,6 +87,20 @@ fun MyApp(cameraExecutor: ExecutorService) {
     var elapsedTime by remember { mutableStateOf("00:00") }
     val timerHandler = remember { Handler() }
     var startTime by remember { mutableStateOf(0L) }
+    var isBluetoothConnected by remember { mutableStateOf(bluetoothAdapter.isEnabled) }
+
+    // Observe Bluetooth connection status
+    DisposableEffect(bluetoothAdapter) {
+        val receiver = BluetoothReceiver { connected ->
+            isBluetoothConnected = connected
+        }
+        context.registerReceiver(receiver, receiver.intentFilter)
+
+        onDispose {
+            context.unregisterReceiver(receiver)
+        }
+    }
+
 
     if (cameraPermissionState.status.isGranted) {
         val previewView = remember { PreviewView(context) }
@@ -80,6 +111,11 @@ fun MyApp(cameraExecutor: ExecutorService) {
             verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
+            Text(
+                text = if (isBluetoothConnected) "Bluetooth Connected" else "Bluetooth Disconnected",
+                color = if (isBluetoothConnected) Color.Green else Color.Red,
+                fontWeight = FontWeight.Bold
+            )
             Text(text = elapsedTime, style = MaterialTheme.typography.bodyMedium)
             Button(onClick = {
                 // Start the timer
@@ -116,7 +152,14 @@ fun MyApp(cameraExecutor: ExecutorService) {
                 Text("Capture Image")
             }
 
-            Text(text = result, style = MaterialTheme.typography.bodyLarge)
+//            Text(text = result, style = MaterialTheme.typography.bodyLarge)
+
+            Text(
+                text = if (isBottle(result)) "Detected" else "None",
+                color = if (isBottle(result)) Color.Green else Color.Red,
+                fontWeight = FontWeight.Bold
+            )
+            NavigationBar()
         }
 
         LaunchedEffect(Unit) {
@@ -137,6 +180,8 @@ fun MyApp(cameraExecutor: ExecutorService) {
     }
 }
 
+
+
 @RequiresApi(Build.VERSION_CODES.KITKAT)
 private fun imageProxyToBitmap(image: ImageProxy): Bitmap? {
     val planeProxy = image.planes[0]
@@ -151,4 +196,62 @@ fun createFile(context: Context): File {
         File(it, context.getString(R.string.app_name)).apply { mkdirs() }
     }
     return File(mediaDir, "${System.currentTimeMillis()}.jpg")
+}
+
+fun isBottle(text: String): Boolean {
+    // Convert text to lowercase for case-insensitive check
+    val lowerText = text.lowercase()
+    // Check if "bottle" is present as a whole word or part of a compound word
+    return "bottle" in lowerText || lowerText.split(" ").any { it == "bottle" }
+}
+
+@Composable
+fun NavigationBar() {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(8.dp)
+            .background(Color.Gray)
+            .padding(4.dp),
+        verticalArrangement = Arrangement.SpaceEvenly,
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Row(
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            NavigationButton(direction = "Up", icon = Icons.Default.KeyboardArrowUp)
+        }
+        Row(
+            horizontalArrangement = Arrangement.SpaceEvenly,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            NavigationButton(direction = "Left", icon = Icons.Default.KeyboardArrowLeft)
+            Spacer(modifier = Modifier.size(64.dp)) // Empty space for center alignment
+            NavigationButton(direction = "Right", icon = Icons.Default.KeyboardArrowRight)
+        }
+        Row(
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            NavigationButton(direction = "Down", icon = Icons.Default.KeyboardArrowDown)
+        }
+    }
+}
+
+@Composable
+fun NavigationButton(direction: String, icon: ImageVector) {
+    Button(
+        onClick = { println("Direction: $direction") },
+        modifier = Modifier
+            .size(64.dp)
+            .background(Color.White),
+        colors = ButtonDefaults.buttonColors(containerColor = Color.White)
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = direction,
+            tint = Color.Black
+        )
+    }
 }
