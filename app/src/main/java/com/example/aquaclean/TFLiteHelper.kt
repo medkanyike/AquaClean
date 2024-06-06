@@ -21,7 +21,7 @@ class TFLiteHelper(context: Context) {
 
     init {
         // Load the model and labels
-        val modelFile = loadModelFile(context, "mobilenet_v1_1.0_224_quant.tflite")
+        val modelFile = loadModelFile(context, "model.tflite")
         interpreter = Interpreter(modelFile)
         labels = FileUtil.loadLabels(context, "names.txt")
     }
